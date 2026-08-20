@@ -166,6 +166,8 @@ tr:hover td{background:#f8fafc}
   .q-stem{font-size:14.5px}
   .paper-card{flex-wrap:wrap}
 }
+.btn-sm{padding:6px 12px;font-size:12.5px;border-radius:7px}
+.ask-area{margin-top:12px;padding-top:10px;border-top:1px dashed var(--line)}
 </style>
 </head>
 <body>
@@ -214,7 +216,8 @@ function load(){
     fuzzy:{},          // 模糊题索引 {模块:[idx]}
     wrong:{},          // 错题本 {id:{m,paper,q,ans,date}}
     mastery:{},        // 知识点 {点:{c,t,m}}
-    donePapers:[]      // 已完成套卷id
+    donePapers:[],     // 已完成套卷id
+    askData:{}         // 疑问/豆包回复 {ask_key:{question,reply,t}}
   };
 }
 function save(){
@@ -250,54 +253,31 @@ const PLAN = (()=>{
 function stageOf(day){ return day<=12 ? '基础夯实' : day<=20 ? '强化突破' : '冲刺模考'; }
 function stageGoal(day){ return day<=12 ? '目标正确率 ≥ 70%' : day<=20 ? '目标正确率 ≥ 85%' : '目标正确率 ≥ 95%（冲满分）'; }
 
-// 当日背诵任务: 基于PDF文字题库。基础期按科目分片过第一遍, 强化/冲刺期续背薄弱科目
+// 当日背诵任务: 基于PDF文字题库。每天同时排三科(每科分配配额), 已背完的科目提供打乱复习
 function memTask(day){
-  // 每天背诵配额(题)
+  // 每天背诵配额(题) - 三科均分
   const QUOTA = day<=12 ? 120 : day<=20 ? 100 : 130;
-  const sched = day<=4 ? '高等教育学' : day<=8 ? '高等教育心理学' : day<=12 ? '综合' : null;
-  if(sched){
-    const bank = PDF_BANK[sched];
-    const done = memProgress(sched);
-    if(done >= bank.length){
-      // 本科已背完: 优先复习模糊题, 否则全量重背
-      const fzm = (S.fuzzy && S.fuzzy[sched]) || [];
-      if(fzm.length) return {module:'复习', fuzzyList:fzm.slice(0,80).map(i=>({m:sched,i})),
-        label:`${SUBJECT[sched]}·${sched} 模糊题复习（${Math.min(fzm.length,80)}题，记住即移出队列）`};
-      return {module:sched, from:0, to:bank.length, review:true,
-        label:`${SUBJECT[sched]}·${sched} PDF复习（全部${bank.length}题）`};
-    }
-    const from = done, to = Math.min(done + QUOTA, bank.length);
-    return { module:sched, from, to,
-             label:`${SUBJECT[sched]}·${sched} PDF背诵（第${from+1}-${to}题，共${bank.length}题）` };
-  }
-  // 强化/冲刺: 按薄弱度排序，逐科续背; 背完的科目优先消化模糊题
-  const order = weakOrder();
-  const tasks=[]; let quota = QUOTA; const fz=[];
-  for(const m of order){
+  const perSubject = Math.ceil(QUOTA / MODULES.length); // 每科配额(约40题)
+  const tasks=[];
+  for(const m of MODULES){
     const bank = PDF_BANK[m];
     const done = memProgress(m);
     if(done < bank.length){
-      const take = Math.min(quota, bank.length - done);
-      if(take>0){
-        tasks.push({module:m, from:done, to:done+take,
-          label:`${SUBJECT[m]}·${m} PDF续背（第${done+1}-${done+take}题，共${bank.length}题）`});
-        quota -= take;
-      }
+      // 未背完: 续背新题
+      const from = done, to = Math.min(done + perSubject, bank.length);
+      tasks.push({module:m, from, to,
+        label:`${SUBJECT[m]}·${m} PDF背诵（第${from+1}-${to}题，共${bank.length}题）`});
     } else {
+      // 已背完: 优先模糊题复习, 否则提供"打乱复习"选项(不清零进度)
       const fzm = (S.fuzzy && S.fuzzy[m]) || [];
-      if(fzm.length){ fzm.forEach(i=>fz.push({m,i})); }
-      else {
-        tasks.push({module:m, from:0, to:bank.length, review:true,
-          label:`${SUBJECT[m]}·${m} PDF复习（全部${bank.length}题）`});
+      if(fzm.length){
+        tasks.push({module:'复习', fuzzyList:fzm.slice(0,80).map(i=>({m,i})),
+          label:`${SUBJECT[m]}·${m} 模糊题复习（${Math.min(fzm.length,80)}题，记住即移出队列）`});
+      } else {
+        tasks.push({module:m, from:0, to:bank.length, shuffleReview:true,
+          label:`✅ ${SUBJECT[m]}·${m} 已全部背完（${bank.length}题）→ 可随机打乱复习`});
       }
     }
-    if(quota<=0) break;
-  }
-  if(tasks.length===0 && fz.length){
-    return {module:'复习', fuzzyList:fz.slice(0,80), label:`模糊题复习（${Math.min(fz.length,80)}题，记住即移出队列）`};
-  }
-  if(tasks.length===0){
-    return {module:'完成', label:'三科题库已全部背完，自由复习'};
   }
   return tasks;
 }
@@ -415,12 +395,13 @@ function memCard(t, idx){
   const label = t.label;
   const count = t.fuzzyList ? t.fuzzyList.length : (t.to - t.from);
   const ico = {'高等教育学':'📘','高等教育心理学':'🧠','综合':'⚖️','复习':'🔁','完成':'🎉'}[t.module]||'📖';
+  const btnText = t.shuffleReview ? '🎲 随机打乱复习' : '开始背诵';
   return `<div class="paper-card mem">
     <div class="ico">${ico}</div>
     <div class="info"><div class="t">${label}</div>
-    <div class="d">翻卡速记：看题干→心里作答→翻面对答案。模糊的标记⭐，自动进复习队列</div></div>
+    <div class="d">${t.shuffleReview ? '打乱顺序重看全部知识点，加深记忆，不清零进度' : '翻卡速记：看题干→心里作答→翻面对答案。模糊的标记⭐，自动进复习队列'}</div></div>
     <div style="text-align:right">
-      <button class="btn btn-pri" onclick="startMem(${idx})">开始背诵</button>
+      <button class="btn ${t.shuffleReview?'btn-ghost':'btn-pri'}" onclick="startMem(${idx})">${btnText}</button>
     </div>
   </div>`;
 }
@@ -442,6 +423,16 @@ function startMem(idx){
     renderMemCard(); return;
   }
   const bank = PDF_BANK[t.module];
+  // 打乱复习模式: 随机打乱全题库, 不清零memPage进度
+  if(t.shuffleReview){
+    // Fisher-Yates洗牌生成乱序索引, 复习时按乱序看; 不修改memPage
+    const indices = Array.from({length:bank.length},(_,i)=>i);
+    for(let i=indices.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [indices[i],indices[j]]=[indices[j],indices[i]]; }
+    const shuffledBank = indices.map(i=>bank[i]);
+    MEM = { module:t.module, bank:shuffledBank, shuffleReview:true, shuffleIdx:indices,
+            from:0, to:bank.length, pos:0, fuzzy:new Set(), start:Date.now() };
+    renderMemCard(); return;
+  }
   const from = t.from!==undefined ? t.from : memProgress(t.module);
   const to = t.to!==undefined ? t.to : bank.length;
   MEM = { module:t.module, bank, from, to, pos:from, fuzzy:new Set(), start:Date.now() };
@@ -457,7 +448,7 @@ function renderMemCard(){
   const count = to - MEM.from;
   // 自动翻面: 默认开启(S.memAuto!==false), 切题后答案+记忆要点直接显示
   const auto = S.memAuto !== false;
-  const memTitle = module==='复习' ? '模糊题复习' : `${SUBJECT[module]}·${module}`;
+  const memTitle = module==='复习' ? '模糊题复习' : (MEM.shuffleReview ? `${SUBJECT[module]}·${module} 随机打乱复习` : `${SUBJECT[module]}·${module}`);
   // 题号导航(标记⭐=模糊, 蓝色底=当前) - 题号从1开始
   const nav = Array.from({length:count},(_,i)=>{
     const abs = MEM.from+i;
@@ -470,7 +461,7 @@ function renderMemCard(){
     <div class="timer" style="background:var(--pri-l);color:var(--pri)" id="memTimer">${fmtTime(MEM.remain||900)}</div>
   </div></div>
   <div class="exam-body">
-    <div class="pbar" style="margin-bottom:10px"><div style="width:${idxInRange/(count)*100}%"></div></div>
+    <div class="pbar" style="margin-bottom:10px"><div style="width:${(idxInRange+1)/count*100}%"></div></div>
     <div class="q-nav">${nav}</div>
     <div class="q-block">
       <span class="q-type ${q.t}">${q.t}</span>
@@ -480,13 +471,29 @@ function renderMemCard(){
         <div class="ans-box">✅ 正确答案：<b>${esc(q.a)}${q.at? '. '+esc(q.at):''}</b></div>
         ${q.hint? `<div class="hint-box">💡 ${esc(q.hint)}</div>`:''}
       </div>
+      <div class="ask-area">
+        <button class="btn btn-ghost btn-sm" onclick="toggleAsk()" id="askToggleBtn">🤔 有疑问？问豆包</button>
+        <div id="askBox" style="display:none;margin-top:10px">
+          <textarea id="askInput" rows="4" style="width:100%;box-sizing:border-box;border:1px solid var(--bd);border-radius:8px;padding:10px;font-size:14px;line-height:1.5;resize:vertical;font-family:inherit" placeholder="提问内容（可编辑）..."></textarea>
+          <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+            <button class="btn btn-pri btn-sm" onclick="askDoubao()" style="background:#7c3aed">🫘 一键复制并打开豆包</button>
+            <button class="btn btn-ghost btn-sm" onclick="fillAskTemplate()">🔄 重新生成提问</button>
+          </div>
+          <div style="margin-top:10px">
+            <div style="font-size:12px;color:var(--txt3);margin-bottom:4px">📝 豆包回复（可粘贴保存，按题保存）：</div>
+            <textarea id="askReply" rows="5" style="width:100%;box-sizing:border-box;border:1px solid var(--bd);border-radius:8px;padding:10px;font-size:13.5px;line-height:1.5;resize:vertical;font-family:inherit" placeholder="把豆包的回复粘贴到这里，会按题保存..."></textarea>
+          </div>
+        </div>
+      </div>
     </div>
     <div style="display:flex;gap:10px;margin-top:12px">
       <button class="btn btn-ghost" style="flex:1" onclick="memNav(${pos-1})" ${pos<=MEM.from?'disabled':''}>← 上一题</button>
       ${auto
         ? `<button class="btn btn-ghost" style="flex:2" onclick="toggleMemAuto()" title="切换为手动翻面(先想后看)">⚡ 自动翻面·点此关闭</button>`
         : `<button class="btn btn-ghost" style="flex:2" onclick="memShow()" id="memShowBtn">👁 翻看答案</button>`}
-      <button class="btn btn-pri" style="flex:1" onclick="memNav(${pos+1})" ${pos>=to-1?'disabled':''}>下一题 →</button>
+      ${pos>=to-1
+        ? `<button class="btn btn-ok" style="flex:1" onclick="finishMem()">✅ 完成</button>`
+        : `<button class="btn btn-pri" style="flex:1" onclick="memNav(${pos+1})">下一题 →</button>`}
     </div>
     <div id="memBtns" style="display:${auto?'block':'none'}">
       <div style="display:flex;gap:10px;margin-top:10px">
@@ -512,11 +519,85 @@ function renderMemCard(){
 function memNav(i){
   const {from,to} = MEM;
   if(i<from || i>to-1) return;
+  if(typeof saveAskReply==='function') saveAskReply(); // 切题前保存当前提问/回复
   MEM.pos = i;
   renderMemCard();
 }
 function memShow(){ $('#memAns').style.display='block'; $('#memBtns').style.display='block';
   const b=$('#memShowBtn'); if(b){ b.textContent='⚡ 开启自动翻面'; b.setAttribute('onclick','toggleMemAuto()'); } }
+// 疑问/问豆包: 提问框自动填充题干+答案+"解释题干和分析选项", 可编辑, 一键复制+打开豆包, 回复按题保存
+function askKey(){ // 当前题目的稳定key(模块+原索引)
+  if(!MEM) return null;
+  const m = MEM.module;
+  // 打乱复习用shuffleIdx映射回原索引; 正常会话用pos; 复习会话用src
+  let origIdx;
+  if(MEM.shuffleReview && MEM.shuffleIdx) origIdx = MEM.shuffleIdx[MEM.pos - MEM.from];
+  else if(MEM.src) origIdx = MEM.src[MEM.pos].m+':'+MEM.src[MEM.pos].i;
+  else origIdx = m+':'+MEM.pos;
+  return 'ask_'+m+'_'+origIdx;
+}
+function fillAskTemplate(){
+  if(!MEM) return;
+  const q = MEM.bank[MEM.pos];
+  const stem = q.s || '';
+  const ans = (q.a||'') + (q.at? ' '+q.at : '');
+  const opts = (q.o||[]).join('\n');
+  const tpl = `题目：${stem}\n${opts? '选项：\n'+opts+'\n':''}\n正确答案：${ans}\n\n请解释题干和分析选项，说明为什么正确答案是这个，其他选项为什么不对，并补充相关知识点。`;
+  const inp = $('#askInput');
+  if(inp){ inp.value = tpl; inp.focus(); }
+}
+function toggleAsk(){
+  const box = $('#askBox'), btn = $('#askToggleBtn');
+  if(!box || !btn) return;
+  const open = box.style.display==='none';
+  box.style.display = open ? 'block' : 'none';
+  btn.textContent = open ? '🤔 收起疑问' : '🤔 有疑问？问豆包';
+  if(open){
+    // 首次展开: 自动填充提问模板 + 加载已保存的回复
+    const inp = $('#askInput');
+    if(inp && !inp.value.trim()) fillAskTemplate();
+    loadAskReply();
+  } else {
+    // 收起时保存回复
+    saveAskReply();
+  }
+}
+function loadAskReply(){
+  const k = askKey(); if(!k) return;
+  S.askData = S.askData || {};
+  const saved = S.askData[k] || {};
+  const inp = $('#askInput'), rep = $('#askReply');
+  if(inp && saved.question) inp.value = saved.question;
+  if(rep && saved.reply) rep.value = saved.reply;
+}
+function saveAskReply(){
+  const k = askKey(); if(!k) return;
+  S.askData = S.askData || {};
+  const inp = $('#askInput'), rep = $('#askReply');
+  S.askData[k] = {
+    question: inp? inp.value : '',
+    reply: rep? rep.value : '',
+    t: Date.now()
+  };
+  save();
+}
+async function askDoubao(){
+  const inp = $('#askInput');
+  if(!inp || !inp.value.trim()){ toast('请先填写提问内容'); return; }
+  saveAskReply();
+  const text = inp.value;
+  // 复制到剪贴板
+  try{
+    await navigator.clipboard.writeText(text);
+    toast('✅ 已复制提问，正在打开豆包...');
+  }catch(e){
+    // 降级: 选中文本
+    inp.select(); document.execCommand('copy');
+    toast('✅ 已复制提问，正在打开豆包...');
+  }
+  // 打开豆包网页(免登录可用)
+  setTimeout(()=>{ window.open('https://www.doubao.com/','_blank'); }, 400);
+}
 // 切换自动/手动翻面(默认自动: 切题后答案+记忆要点直接显示), 设置持久化保存
 function toggleMemAuto(){
   S.memAuto = !(S.memAuto !== false);
@@ -525,7 +606,8 @@ function toggleMemAuto(){
   renderMemCard();
 }
 function memMark(fuzzy){
-  const {pos} = MEM;
+  if(typeof saveAskReply==='function') saveAskReply(); // 切题前保存提问/回复
+  const {pos, to} = MEM;
   if(fuzzy) MEM.fuzzy.add(pos); else MEM.fuzzy.delete(pos);
   // 复习会话: "记住了"→移出模糊队列; "仍模糊"→留在队列
   if(MEM.src){
@@ -535,12 +617,18 @@ function memMark(fuzzy){
       if(!fuzzy){ const k = arr.indexOf(src.i); if(k>-1) arr.splice(k,1); }
       else if(!arr.includes(src.i)) arr.push(src.i);
     }
+  } else if(MEM.shuffleReview){
+    // 打乱复习会话: 不修改memPage进度(不清零); 模糊题记录到MEM.fuzzy(乱序位置), commitMem时映射回原索引入队
+    // (此处不直接写S.fuzzy, 避免乱序位置与原索引混淆)
   } else {
     // 正常会话: 实时保存背诵进度
-    S.memPage = S.memPage || {}; S.memPage[MEM.module] = MEM.pos;
+    S.memPage = S.memPage || {};
+    // 标记当前题后, 进度推进到 pos+1 (表示pos已背); 若是最后一题, 进度=to(完成)
+    S.memPage[MEM.module] = Math.max(S.memPage[MEM.module]||0, pos+1<=to ? pos+1 : to);
   }
-  // 标记后若当前是最后可看题, 停在原地; 否则翻到下一题
+  // 标记后若当前是最后一题, 停在原地(可继续回看); 否则翻到下一题
   if(MEM.pos < MEM.to-1) MEM.pos++;
+  else toast('🎉 本轮最后一题已标记，可点"完成"结束');
   save();
   renderMemCard();
 }
@@ -552,21 +640,30 @@ function quitMem(){
 }
 function finishMem(){
   if(MEM && MEM.timer){ clearInterval(MEM.timer); MEM.timer=null; }
-  const n = MEM.to;
+  const n = MEM.to, mod = MEM.module;
   commitMem(true);
   $('#examWrap').classList.remove('active');
-  toast(`🎉 ${SUBJECT[MEM.module]||''} 本轮背诵完成 ${n} 题！`);
+  toast(`🎉 ${SUBJECT[mod]||mod||''} 本轮背诵完成 ${n} 题！`);
   renderToday();
 }
 function commitMem(finished){
   if(!MEM) return;
-  // 模糊题入队(仅正常背诵会话; 复习会话的标记已在memMark中联动处理)
-  if(!MEM.src){
+  // 模糊题入队(仅正常背诵会话; 复习/打乱复习会话单独处理)
+  if(!MEM.src && !MEM.shuffleReview){
     MEM.fuzzy.forEach(i=>{
       const key = MEM.module;
       S.fuzzy = S.fuzzy||{};
       S.fuzzy[key] = S.fuzzy[key]||[];
       if(!S.fuzzy[key].includes(i)) S.fuzzy[key].push(i);
+    });
+  } else if(MEM.shuffleReview){
+    // 打乱复习: 把模糊题的乱序位置映射回原题索引再入队
+    MEM.fuzzy.forEach(shufPos=>{
+      const origIdx = MEM.shuffleIdx ? MEM.shuffleIdx[shufPos] : shufPos;
+      const key = MEM.module;
+      S.fuzzy = S.fuzzy||{};
+      S.fuzzy[key] = S.fuzzy[key]||[];
+      if(!S.fuzzy[key].includes(origIdx)) S.fuzzy[key].push(origIdx);
     });
   }
   const day = S.day;
