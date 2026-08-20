@@ -358,11 +358,18 @@ function renderToday(){
     const pid = pm+pn;
     const sub = recPapers[pid]; // 该套卷完成记录
     const done = !!sub;
+    // 该科已完成套卷数/总套卷数(按donePapers统计, 排除强化训练drill)
+    const totalOfM = PAPERS.filter(p=>p.m===pm).length;
+    const doneOfM = PAPERS.filter(p=>p.m===pm && S.donePapers.includes(p.m+p.n)).length;
+    const pctOfM = totalOfM? Math.round(doneOfM/totalOfM*100):0;
     html += `
   <div class="paper-card ${done?'done':''}">
     <div class="ico" style="background:var(--pri-l)">${done?'✅':'📝'}</div>
     <div class="info">
       <div class="t">${SUBJECT[pm]} · ${pm} 真题卷（第${pn}套）</div>
+      <div class="d" style="margin-bottom:4px">📦 进度：<b style="color:var(--pri)">${doneOfM}/${totalOfM}</b>
+        <span class="pbar" style="display:inline-block;width:70px;height:5px;vertical-align:middle;margin:0 6px"><span style="display:block;height:100%;width:${pctOfM}%;background:var(--pri);border-radius:3px"></span></span>
+        <small style="color:var(--txt3)">${pctOfM}%</small></div>
       <div class="d">共 ${paper.qs.length} 题 · 单选${paper.qs.filter(q=>q.t==='单选题').length} / 多选${paper.qs.filter(q=>q.t==='多选题').length} / 判断${paper.qs.filter(q=>q.t==='判断题').length} · 建议用时20分钟</div>
     </div>
     <div class="stat">${done?`<b>${sub.rate}%</b>得分率<br><small>${sub.used}道错题已入本</small>`:`<b>${paper.qs.length}</b>题<br><small>待完成</small>`}</div>
