@@ -234,20 +234,12 @@ function curDay(){
 }
 
 /* ---------- 30天计划 ---------- */
-// 套卷分配: 每模块用前10套排进30天
+// 套卷分配: 每天三科各一套(第d天做每科第d套, 每科30套正好30天用完)
 const PLAN = (()=>{ 
   const plan = {};
-  const seq = [
-    ['高等教育学',1],['高等教育学',2],['高等教育学',3],['高等教育学',4],
-    ['高等教育心理学',1],['高等教育心理学',2],['高等教育心理学',3],['高等教育心理学',4],
-    ['综合',1],['综合',2],['综合',3],['综合',4],
-    ['高等教育学',5],['高等教育学',6],['高等教育学',7],['高等教育学',8],
-    ['高等教育心理学',5],['高等教育心理学',6],['高等教育心理学',7],['高等教育心理学',8],
-    ['综合',5],['综合',6],['综合',7],['综合',8],
-    ['高等教育学',9],['高等教育学',10],['高等教育心理学',9],['高等教育心理学',10],
-    ['综合',9],['综合',10]
-  ];
-  for(let i=0;i<30;i++) plan[i+1] = seq[i];
+  for(let d=1; d<=EXAM_DAYS; d++){
+    plan[d] = [['高等教育学',d], ['高等教育心理学',d], ['综合',d]];
+  }
   return plan;
 })();
 function stageOf(day){ return day<=12 ? '基础夯实' : day<=20 ? '强化突破' : '冲刺模考'; }
@@ -321,11 +313,9 @@ function renderToday(){
   const day = S.day;
   const left = EXAM_DAYS - day + 1;
   const stage = stageOf(day);
-  const [pm,pn] = PLAN[day];
-  const paper = PAPERS.find(p=>p.m===pm && p.n===pn);
-  const pid = pm+pn;
+  const papersOfDay = PLAN[day] || []; // [[模块,套号]x3]
   const rec = S.days[day];
-  const doneToday = !!rec;
+  const recPapers = (rec && rec.papers) || {}; // {pid:{pm,pn,rate,used,...}}
   
   // 背诵进度（PDF文字题库）
   const memDone = MODULES.reduce((a,m)=>a+memProgress(m),0);
@@ -360,21 +350,32 @@ function renderToday(){
   }
   
   html += `
-  <div class="sec-title"><span class="num">2</span>第二步 · 1小时套卷真题训练 <span class="hint">严格计时 60 分钟</span></div>
-  <div class="paper-card ${doneToday?'done':''}">
-    <div class="ico" style="background:var(--pri-l)">${doneToday?'✅':'📝'}</div>
+  <div class="sec-title"><span class="num">2</span>第二步 · 1小时套卷真题训练 <span class="hint">三科各一套 · 严格计时</span></div>`;
+  // 三科套卷卡片(科目一/二/三各一套)
+  papersOfDay.forEach(([pm,pn])=>{
+    const paper = PAPERS.find(p=>p.m===pm && p.n===pn);
+    if(!paper) return;
+    const pid = pm+pn;
+    const sub = recPapers[pid]; // 该套卷完成记录
+    const done = !!sub;
+    html += `
+  <div class="paper-card ${done?'done':''}">
+    <div class="ico" style="background:var(--pri-l)">${done?'✅':'📝'}</div>
     <div class="info">
       <div class="t">${SUBJECT[pm]} · ${pm} 真题卷（第${pn}套）</div>
-      <div class="d">共 ${paper.qs.length} 题 · 单选${paper.qs.filter(q=>q.t==='单选题').length} / 多选${paper.qs.filter(q=>q.t==='多选题').length} / 判断${paper.qs.filter(q=>q.t==='判断题').length} · 建议用时60分钟</div>
+      <div class="d">共 ${paper.qs.length} 题 · 单选${paper.qs.filter(q=>q.t==='单选题').length} / 多选${paper.qs.filter(q=>q.t==='多选题').length} / 判断${paper.qs.filter(q=>q.t==='判断题').length} · 建议用时20分钟</div>
     </div>
-    <div class="stat">${doneToday?`<b>${rec.rate}%</b>今日得分率<br><small>${rec.used}道错题已入本</small>`:`<b>${paper.qs.length}</b>题<br><small>今日待完成</small>`}</div>
-  </div>
-  <div style="text-align:center;margin:14px 0 30px">
-    ${doneToday 
-      ? `<button class="btn btn-ghost" onclick="reviewResult(${day})">查看今日解析</button> <button class="btn btn-pri" onclick="startPaper('${pm}',${pn})">再练一遍</button>`
-      : `<button class="btn btn-pri btn-lg" onclick="startPaper('${pm}',${pn})">开始训练 →</button>`}
-  </div>
+    <div class="stat">${done?`<b>${sub.rate}%</b>得分率<br><small>${sub.used}道错题已入本</small>`:`<b>${paper.qs.length}</b>题<br><small>待完成</small>`}</div>
+    <div style="text-align:right">
+      ${done
+        ? `<button class="btn btn-ghost btn-sm" onclick="reviewResult(${day},'${pid}')">查看解析</button> `
+        : ''}
+      <button class="btn ${done?'btn-ghost':'btn-pri'}" onclick="startPaper('${pm}',${pn})">${done?'再练一遍':'开始训练 →'}</button>
+    </div>
+  </div>`;
+  });
 
+  html += `
   <div class="sec-title"><span class="num">3</span>本周态势</div>
   <div class="card">
     <div class="stat-row" style="margin-bottom:0">
@@ -782,9 +783,25 @@ function submitPaper(timeout){
   const score = Math.round(correct/qs.length*100);
   const usedSec = Math.min(3600, Math.floor((Date.now()-EX.start)/1000));
   const day = S.day;
-  S.days[day] = { date:todayStr(), paper:EX.pid, pm:paper.m, pn:paper.n,
-    score:correct, total:qs.length, rate:score, used:wrongIds.length, usedSec,
-    timeout:!!timeout, pts };
+  // 当天记录: 每套卷独立记录 + 聚合(兼容旧单卷结构)
+  S.days[day] = S.days[day] || { date:todayStr(), papers:{} };
+  const drec = S.days[day];
+  drec.papers = drec.papers || {};
+  drec.papers[EX.pid] = { pm:paper.m, pn:paper.n, score:correct, total:qs.length, rate:score,
+    used:wrongIds.length, usedSec, timeout:!!timeout, pts };
+  // 聚合字段(进度页/图表/统计用): 三套平均得分率、合计得分/题数/错题
+  const vals = Object.values(drec.papers);
+  const ptsAll = {};
+  vals.forEach(v=>{ Object.entries(v.pts||{}).forEach(([k,p])=>{ ptsAll[k]=ptsAll[k]||{c:0,t:0}; ptsAll[k].c+=p.c; ptsAll[k].t+=p.t; }); });
+  drec.date = todayStr();
+  drec.rate = Math.round(vals.reduce((a,v)=>a+v.rate,0)/vals.length);
+  drec.score = vals.reduce((a,v)=>a+v.score,0);
+  drec.total = vals.reduce((a,v)=>a+v.total,0);
+  drec.used = vals.reduce((a,v)=>a+v.used,0);
+  drec.usedSec = vals.reduce((a,v)=>a+v.usedSec,0);
+  drec.pts = ptsAll;
+  // 兼容旧字段
+  drec.paper = EX.pid; drec.pm = paper.m; drec.pn = paper.n;
   if(!S.donePapers.includes(EX.pid)) S.donePapers.push(EX.pid);
   save();
   const result = {correct, wrong, unanswered, total:qs.length, score, usedSec, wrongIds, paper, answers, day};
@@ -856,18 +873,25 @@ function showResult(r){
 }
 function scrollToWrong(){ const el=$('#wrongSec'); if(el) el.scrollIntoView({behavior:'smooth'}); }
 function backHome(){ $('#examWrap').classList.remove('active'); renderToday(); }
-function reviewResult(day){
+function reviewResult(day, pid){
   const rec = S.days[day];
   if(!rec) return;
-  const paper = PAPERS.find(p=>p.m===rec.pm && p.n===rec.pn);
+  // 新结构(papers多套)优先按pid取; 无pid取第一套; 兼容旧单卷结构
+  let pm, pn, sub;
+  if(pid && rec.papers && rec.papers[pid]){ sub = rec.papers[pid]; }
+  else if(rec.papers){ sub = Object.values(rec.papers)[0]; }
+  else { sub = rec; }
+  pm = sub.pm; pn = sub.pn;
+  const paper = PAPERS.find(p=>p.m===pm && p.n===pn);
+  if(!paper){ toast('未找到该套卷'); return; }
   // 重构答案: 从错题本取
   const answers={};
   Object.entries(S.wrong).forEach(([wid,w])=>{
-    if(w.m===rec.pm && w.paper===rec.pn){
+    if(w.m===pm && w.paper===pn){
       paper.qs.forEach((q,i)=>{ if(q.s===w.q.s){ answers[i]=w.my; } });
     }
   });
-  showResult({correct:rec.score, total:rec.total, score:rec.rate, usedSec:rec.usedSec,
+  showResult({correct:sub.score, total:sub.total, score:sub.rate, usedSec:sub.usedSec,
     wrongIds: paper.qs.map((q,i)=>answers[i]!==undefined&&answers[i]!==q.a?i:-1).filter(i=>i>=0),
     paper, answers, day});
 }
@@ -913,7 +937,11 @@ function renderProgress(){
       const r=S.days[d];
       const goal = d<=12?70:d<=20?85:95;
       const pass = r.rate>=goal;
-      return `<tr><td><b>D${d}</b></td><td>${r.date}</td><td>${SUBJECT[r.pm]}·第${r.pn}套</td>
+      // 套卷列: 新结构显示三科套数, 旧结构显示单套名
+      const paperName = r.papers
+        ? Object.values(r.papers).map(v=>SUBJECT[v.pm].replace('科目','科')+'第'+v.pn+'套').join(' ')
+        : (SUBJECT[r.pm]||'')+'·第'+r.pn+'套';
+      return `<tr><td><b>D${d}</b></td><td>${r.date}</td><td style="font-size:11.5px">${paperName}</td>
         <td>${r.score}/${r.total}</td><td><b style="color:${r.rate>=85?'var(--ok)':r.rate>=70?'var(--warn)':'var(--err)'}">${r.rate}%</b></td>
         <td>${r.used}</td><td>${fmtTime(r.usedSec)}</td><td>${S.memLog[d]||0}题</td>
         <td>${pass?'✅':'🎯'+goal+'%'}</td></tr>`;
